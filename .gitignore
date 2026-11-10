@@ -1,0 +1,22 @@
+# Private notes.
+/README.local.md
+
+# C++ / CMake build output and local tooling state.
+/build/
+/build-*/
+/cmake-build-*/
+/CMakeUserPresets.json
+/compile_commands.json
+/.cache/clangd/
+
+# Local configuration and credentials.
+/.env
+/.env.*
+!/.env.example
+/.aws/
+/.kube/
+/kubeconfig
+/kubeconfig.*
+
+# Operating system metadata.
+.DS_Store
