@@ -1,8 +1,8 @@
 # ShipQuote
 
-REST API tính phí vận chuyển bằng C++17 và Drogon, phục vụ mini project môn Cloud Computing về Kubernetes và triển khai trên AWS bằng EKS.
+REST API tính phí vận chuyển bằng Node.js và Express, phục vụ mini project môn Cloud Computing về Kubernetes và triển khai trên AWS bằng EKS.
 
-**Trạng thái:** đã thống nhất kế hoạch; chưa hiện thực ứng dụng, Dockerfile, Kubernetes manifests hoặc hạ tầng AWS. Các API, cấu trúc thư mục và lệnh chạy bên dưới là hợp đồng triển khai dự kiến. Chỉ đánh dấu hoàn thành khi có kết quả kiểm chứng.
+**Trạng thái:** phần application (thành viên 1) đã hiện thực bằng Node.js/Express, có tests và Dockerfile, đã kiểm chứng local và trong container ngày 2026-11-15. Kubernetes manifests và hạ tầng AWS chưa hiện thực; các mục đó bên dưới vẫn là hợp đồng triển khai dự kiến. Chỉ đánh dấu hoàn thành khi có kết quả kiểm chứng.
 
 ## Mục tiêu
 
@@ -17,11 +17,11 @@ Xây dựng một dịch vụ nhỏ để quan sát cách Kubernetes vận hành
 | REST API tính phí, đọc bảng giá, xem thông tin instance | OpenAPI và Swagger UI |
 | Docker image chạy được trên Linux | HPA theo CPU và kịch bản tạo tải |
 | Deployment gồm 3 replica và Service nội bộ | Endpoint công khai bằng AWS Network Load Balancer |
-| ConfigMap, readiness/liveness probes, resource requests/limits | CI chạy build/test C++ và build image |
+| ConfigMap, readiness/liveness probes, resource requests/limits | CI chạy test và build image |
 | Demo scale, self-healing, probes, rollout và rollback | |
 | Chạy trên kind và AWS EKS; có quy trình cleanup | |
 
-Frontend, database, đăng nhập, thanh toán và quản lý đơn hàng nằm ngoài phạm vi MVP. HPA không phải điều kiện để hoàn thành bài tập. MPI, OpenMP và kernel HPC không thuộc phần hiện thực bắt buộc; việc chọn C++ không bổ sung yêu cầu tính toán song song cho hai thành viên phụ trách Kubernetes/AWS.
+Frontend, database, đăng nhập, thanh toán và quản lý đơn hàng nằm ngoài phạm vi MVP. HPA không phải điều kiện để hoàn thành bài tập. MPI, OpenMP và kernel HPC không thuộc phần hiện thực bắt buộc.
 
 ## Kiến trúc và công nghệ
 
@@ -49,14 +49,14 @@ Luồng build và phân phối image tách khỏi luồng HTTP. Local có thể 
 
 | Thành phần | Lựa chọn |
 | --- | --- |
-| Ngôn ngữ | C++17; chốt phiên bản GCC/Clang khi khởi tạo ứng dụng |
-| HTTP framework | Drogon; chốt release và commit cụ thể |
-| Network và concurrency | Event loops của Drogon/Trantor; dùng callback handlers trong MVP |
-| JSON | JsonCpp qua Drogon; ánh xạ sang struct nghiệp vụ và validate rõ ràng |
-| Build | CMake + Ninja; quản lý phiên bản dependencies trong script bootstrap |
-| Logging | Logger Drogon/Trantor; log ra stdout/stderr |
-| Kiểm tra chất lượng | clang-format, compiler warnings, DrogonTest + CTest; clang-tidy khi cần |
-| Container | Docker build nhiều stage; runtime chạy bằng user không phải root |
+| Ngôn ngữ và runtime | JavaScript (CommonJS) trên Node.js 24 LTS; `.nvmrc` và base image dùng cùng major |
+| HTTP framework | Express 5.3.0; pin chính xác trong `package.json` và `package-lock.json` |
+| Network và concurrency | Một event loop Node.js cho mỗi tiến trình; handler đồng bộ, không tự tạo thread |
+| JSON | `JSON.parse` của Node.js; kiểm tra kiểu và miền giá trị trước khi tính |
+| Dependencies | npm; `npm ci` cài đúng phiên bản trong lockfile |
+| Logging | Logger nhỏ trong `src/logger.js`; mỗi dòng là một JSON object ra stdout/stderr |
+| Kiểm tra chất lượng | `node:test` và `node:assert` có sẵn trong Node.js; HTTP tests chạy với server thật trên port tạm |
+| Container | Docker build nhiều stage, chạy test khi build; runtime chạy bằng user không phải root |
 | Kubernetes local | kind |
 | Cloud | AWS EKS với EC2 managed node group; ECR lưu image |
 | Tài liệu API tùy chọn | OpenAPI specification trong repo và Swagger UI phục vụ tại `/docs` |
@@ -130,10 +130,11 @@ Quy ước lỗi cho endpoint báo giá:
 | --- | --- |
 | 400 | Body không phải JSON hợp lệ |
 | 415 | Content-Type không được hỗ trợ |
+| 413 | Body lớn hơn 10 KB |
 | 422 | Thiếu field bắt buộc, sai kiểu dữ liệu hoặc vượt giới hạn input |
 | 500 | Lỗi nội bộ ngoài dự kiến; không trả chi tiết nội bộ cho client |
 
-Lỗi báo giá dùng schema thống nhất. Controller phải phân biệt Content-Type sai, JSON sai cú pháp và dữ liệu sai kiểu/giá trị; ánh xạ các lỗi từ Drogon/JsonCpp sang status và schema này. Không ép kiểu giá trị JSON trước khi kiểm tra kiểu và miền giá trị.
+Mọi lỗi dùng schema thống nhất. Handler kiểm tra theo thứ tự: Content-Type (`415`) → cú pháp JSON (`400`) → kiểu và miền giá trị (`422`). Không ép kiểu giá trị JSON: `"1500"`, `1500.5`, `true` và `null` đều bị từ chối.
 
 ```json
 {
@@ -143,6 +144,16 @@ Lỗi báo giá dùng schema thống nhất. Controller phải phân biệt Cont
   }
 }
 ```
+
+| `error.code` | HTTP status | Trường hợp |
+| --- | --- | --- |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | Content-Type không phải `application/json` |
+| `INVALID_JSON` | 400 | Body rỗng hoặc sai cú pháp JSON |
+| `BAD_REQUEST` | 400 | Request hỏng ở tầng HTTP theo cách khác |
+| `PAYLOAD_TOO_LARGE` | 413 | Body lớn hơn 10 KB |
+| `VALIDATION_ERROR` | 422 | Body không phải object, thiếu field, sai kiểu hoặc ngoài miền |
+| `NOT_FOUND` | 404 | Path hoặc method không có trong bảng endpoint |
+| `INTERNAL_ERROR` | 500 | Lỗi ngoài dự kiến |
 
 ### Cấu hình và container contract
 
@@ -154,22 +165,22 @@ Lỗi báo giá dùng schema thống nhất. Controller phải phân biệt Cont
 | `PER_KG_VND` | `5000` | Truyền qua ConfigMap |
 | `POD_NAME` | `local` khi chạy ngoài cluster | Kubernetes truyền từ `metadata.name` qua Downward API |
 | `DEMO_MODE` | `false` | Chỉ bật trong môi trường thực hiện demo lỗi |
-| `LOG_LEVEL` | `info` | Ứng dụng đọc và ánh xạ sang mức log của Drogon; không ghi credential hoặc thông tin nhạy cảm |
-| `HTTP_THREADS` | `2` | Số worker I/O của Drogon; số nguyên dương, cấu hình khi khởi động |
-| `app_version` | `PROJECT_VERSION` trong CMake tại build time | Sinh header version bằng `configure_file`; response phản ánh binary thực tế |
+| `LOG_LEVEL` | `info` | Một trong `debug`, `info`, `warn`, `error`; request tới `/health/*` chỉ log ở mức `debug`; không ghi credential hoặc thông tin nhạy cảm |
+| `app_version` | `version` trong `package.json` | Đọc khi khởi động từ `package.json` nằm trong image; response phản ánh bản build thực tế |
 
-Các biến môi trường trên do ứng dụng đọc, kiểm tra và áp dụng; Drogon không tự đọc các tên biến tùy chỉnh này. Thành viên 2 dùng `LOG_LEVEL` và có thể cấu hình `HTTP_THREADS` qua ConfigMap. Port, API schema, các biến bảng giá và health paths là giao diện bàn giao cố định.
+Ứng dụng đọc và kiểm tra các biến môi trường trên khi khởi động. Giá trị sai, kể cả chuỗi rỗng, làm tiến trình in tên biến ra stderr rồi thoát với mã 1 trước khi mở port. Port, API schema, các biến bảng giá và health paths là giao diện bàn giao cố định.
 
-- Pin release/commit Drogon cùng phiên bản Trantor tương ứng; ghi dependencies và toolchain trong `scripts/bootstrap-deps.sh`. Docker build dùng cùng quy trình; không build theo nhánh thư viện thay đổi liên tục.
-- CMake dùng `find_package(Drogon CONFIG REQUIRED)` và link target `Drogon::Drogon`. Script bootstrap chuẩn bị dependencies tại `build/deps/install`; cấu hình CMake nhận prefix này.
+`HTTP_THREADS` của bản kế hoạch C++ đã bỏ: Node.js xử lý request trên một event loop, muốn tăng năng lực thì tăng số replica. Nếu ConfigMap còn biến này, ứng dụng bỏ qua.
+
+- Pin Express trong `package.json` và toàn bộ cây dependencies trong `package-lock.json`; Docker build dùng `npm ci --omit=dev`. Base image `node:24-bookworm-slim` pin theo digest trong `Dockerfile`.
 - Dùng tag image cụ thể như `1.0.0`, `1.1.0`; không ghi đè nội dung tag đã dùng trong demo. Có thể pin digest khi triển khai.
-- Mỗi container chạy một tiến trình binary C++; Drogon/Trantor quản lý các thread trong tiến trình. Số thread không cấp thêm CPU cho container.
-- Runtime image chứa binary và shared libraries cần thiết, không cần compiler hoặc CMake. Builder/runtime dùng môi trường Linux tương thích; kiểm tra dependencies bằng `ldd` trên Linux.
-- Dockerfile dùng exec-form `ENTRYPOINT` để binary nhận signal trực tiếp; ứng dụng chạy foreground và không bật daemon mode.
-- Xử lý `SIGTERM` trên Linux và `Ctrl+C` khi chạy local; hoàn thành request đang xử lý trong khoảng grace period đã thống nhất.
+- Mỗi container chạy một tiến trình Node.js với một event loop; không dùng cluster hoặc worker threads.
+- Runtime image chỉ chứa Node.js, `node_modules` production, `package.json` và `src/`; không có tests, ghi chú riêng hay credential.
+- Dockerfile dùng exec-form `ENTRYPOINT ["node", "src/server.js"]` để tiến trình nhận signal trực tiếp; không chạy qua `npm start` trong container.
+- Khi nhận `SIGTERM` hoặc `Ctrl+C`: readiness chuyển `503`, server ngừng nhận kết nối mới, hoàn thành request đang xử lý rồi thoát mã 0. Kết nối keep-alive vừa xong request có thể giữ tiến trình thêm tối đa 5 giây. Sau 25 giây vẫn còn kết nối thì đóng cưỡng bức và thoát mã 1.
 - Build image Linux phù hợp kiến trúc worker node. Baseline dùng `linux/amd64` và node x86; nhóm có thể đổi đồng bộ nếu dùng ARM.
 - Ứng dụng không cần AWS SDK hoặc credential AWS để xử lý báo giá.
-- Cấu hình document root riêng cho static assets, ban đầu rỗng; không phục vụ file từ thư mục source/repo. Chỉ thêm assets của Swagger UI khi triển khai phần mở rộng.
+- Ứng dụng không phục vụ static file; mọi path ngoài bảng endpoint trả `404`. Chỉ thêm assets của Swagger UI khi triển khai phần mở rộng.
 
 ### Cơ chế giả lập lỗi
 
@@ -181,35 +192,32 @@ Chỉ kích hoạt khi `DEMO_MODE=true`, bằng cách thao tác trực tiếp tr
 | `/tmp/shipquote-unhealthy` | Cả liveness và readiness trả `503` |
 | Không có cờ | Hai probe trả `200` sau khi khởi tạo hoàn tất |
 
-Ứng dụng xóa cờ demo khi khởi động để phục hồi sau restart, kể cả khi `/tmp` được mount bằng volume. Khi `DEMO_MODE=false`, các cờ không ảnh hưởng đến probes. Không mở endpoint HTTP công khai để điều khiển lỗi. Runtime image dùng cho bài demo cần có công cụ tạo/xóa cờ, hoặc nhóm bổ sung subcommand tương đương trong binary.
+Ứng dụng xóa cờ demo khi khởi động để phục hồi sau restart, kể cả khi `/tmp` được mount bằng volume. Khi `DEMO_MODE=false`, các cờ không ảnh hưởng đến probes. Không mở endpoint HTTP công khai để điều khiển lỗi. Runtime image dựa trên Debian slim nên có sẵn `touch` và `rm` để tạo/xóa cờ.
 
 ### Concurrency trong MVP
 
-Mỗi request có dữ liệu và kết quả riêng; bảng giá được khởi tạo trước khi server nhận traffic rồi giữ bất biến. Hàm tính phí chạy đồng bộ trong handler vì công việc rất ngắn. Không cần tự tạo thread cho từng request hoặc dùng MPI/OpenMP để tính phí.
+Mỗi request có dữ liệu và kết quả riêng; bảng giá được đọc trước khi server nhận traffic rồi giữ bất biến. Hàm tính phí chạy đồng bộ trong handler vì công việc rất ngắn. Node.js chạy code của ứng dụng trên một thread nên handler không cần khóa; đổi lại, không chặn event loop bằng I/O đồng bộ kéo dài hoặc tính toán nặng.
 
-Handler/controller phải an toàn khi được gọi đồng thời. Không dùng biến thành viên có thể thay đổi để chứa dữ liệu của request; dữ liệu cần sống qua callback phải được sở hữu đúng cách. Tránh blocking I/O dài, `sleep` và tính toán nặng trên event loop. [Drogon threading model](https://github.com/drogonframework/drogon/wiki/ENG-FAQ-1-Understanding-drogon-threading-model)
-
-Kiểm thử gửi request đồng thời để xác nhận response không lẫn dữ liệu và health checks còn đáp ứng. Nếu về sau thêm shared mutable state, thiết kế cơ chế đồng bộ trong process; mutex/atomic của một process không đồng bộ dữ liệu giữa các Pod. Hướng tích hợp HPC cần được thống nhất riêng sau MVP, bao gồm giới hạn compute workers và ngân sách CPU.
+Test gửi 300 request đồng thời để xác nhận response không lẫn dữ liệu và health checks còn đáp ứng. Trạng thái trong bộ nhớ của một tiến trình không được chia sẻ giữa các Pod; ứng dụng không giữ state nào ngoài trạng thái readiness.
 
 ## Phân công và đầu ra bàn giao
 
 | Chủ sở hữu | Phạm vi | Đầu ra |
 | --- | --- | --- |
-| Thành viên 1 — Application | C++/Drogon API, CMake, validation, cấu hình, logging, shutdown, health checks, Docker | Source code, build/dependency scripts, tests, Dockerfile, `.dockerignore`, hướng dẫn chạy, image phiên bản 1.0.0 và 1.1.0 |
+| Thành viên 1 — Application | Node.js/Express API, validation, cấu hình, logging, shutdown, health checks, Docker | Source code, `package.json` và lockfile, tests, Dockerfile, `.dockerignore`, hướng dẫn chạy, image phiên bản 1.0.0 và 1.1.0 |
 | Thành viên 2 — Kubernetes | Manifests và kiểm thử trên kind | Namespace, Deployment, Service, ConfigMap, probes, resource settings, scripts và kết quả demo local |
 | Thành viên 3 — AWS | ECR, EKS, IAM/network liên quan, triển khai và cleanup | Cấu hình hạ tầng tái tạo được, ECR image URI, hướng dẫn triển khai, kết quả demo EKS và checklist cleanup |
 | Cả nhóm | Tích hợp, nghiệm thu, thuyết trình | API contract thống nhất, runbook demo, bằng chứng quan sát và báo cáo |
 
 ### Thành viên 1 — Application và Docker
 
-- [ ] Chốt compiler, Drogon/dependencies; tạo CMake targets và script bootstrap dùng chung cho local/Docker.
-- [ ] Hiện thực hàm tính phí độc lập với HTTP; kiểm thử công thức và các biên khối lượng.
-- [ ] Hiện thực endpoints, JSON schema, validation và error responses.
-- [ ] Đọc và kiểm tra cấu hình; trả metadata Pod và version.
-- [ ] Thêm logging, health checks, graceful shutdown và cờ demo lỗi.
-- [ ] Chạy format, compiler warnings và CTest; có HTTP tests cho success/error paths và request đồng thời.
-- [ ] Kiểm tra vòng đời dữ liệu/callback; chạy AddressSanitizer/UndefinedBehaviorSanitizer trên cấu hình phát triển phù hợp.
-- [ ] Build và chạy container bằng user không phải root; kiểm tra gọi API và dừng container.
+- [x] Chốt Node.js, Express và base image; pin trong `package.json`, `package-lock.json`, `.nvmrc` và `Dockerfile`.
+- [x] Hiện thực hàm tính phí độc lập với HTTP; kiểm thử công thức và các biên khối lượng.
+- [x] Hiện thực endpoints, JSON schema, validation và error responses.
+- [x] Đọc và kiểm tra cấu hình; trả metadata Pod và version.
+- [x] Thêm logging, health checks, graceful shutdown và cờ demo lỗi.
+- [x] `npm test` qua; có HTTP tests cho success/error paths và request đồng thời.
+- [x] Build và chạy container bằng user không phải root; kiểm tra gọi API và dừng container.
 - [ ] Bàn giao image đầu tiên sớm để hai thành viên còn lại tích hợp.
 - [ ] Chuẩn bị hai bản build có version khác nhau và giữ tương thích API.
 
@@ -247,29 +255,30 @@ Nhiều Pod trên một worker node chưa chứng minh khả năng chịu lỗi 
 
 ## Cấu trúc repo dự kiến
 
-Ngoài README và cấu hình Git, các thành phần dưới đây sẽ được tạo trong quá trình hiện thực:
+Phần application đã có trong repo; `k8s/`, `infra/` và `docs/` sẽ được tạo trong quá trình hiện thực:
 
 ```text
 .
 ├── README.md
 ├── .gitignore
-├── CMakeLists.txt
-├── .clang-format
-├── cmake/
-│   └── version.h.in     # Sinh version header trong build/generated/
+├── .nvmrc               # Major Node.js dùng khi phát triển
+├── package.json         # Version ứng dụng, scripts, dependencies
+├── package-lock.json
 ├── Dockerfile
 ├── .dockerignore
-├── include/shipquote/   # Headers cho config, models, pricing, health, HTTP
 ├── src/
-│   ├── main.cpp         # Khởi động, listener, shutdown
-│   ├── config.cpp       # Đọc và kiểm tra cấu hình
-│   ├── pricing.cpp      # Hàm tính phí độc lập với HTTP
-│   ├── http.cpp         # Routes, JSON validation, response và lỗi
-│   └── health.cpp       # Probes và cờ demo
-├── tests/
-│   ├── CMakeLists.txt   # Đăng ký tests với CTest
-│   ├── pricing_test.cpp
-│   └── api_test.cpp
+│   ├── server.js        # Khởi động, listener, shutdown
+│   ├── app.js           # Routes, JSON validation, response và lỗi
+│   ├── config.js        # Đọc và kiểm tra cấu hình
+│   ├── pricing.js       # Hàm tính phí độc lập với HTTP
+│   ├── health.js        # Probes và cờ demo
+│   └── logger.js
+├── test/
+│   ├── pricing.test.js
+│   ├── config.test.js
+│   ├── api.test.js
+│   ├── health.test.js
+│   └── helpers.js       # Mở server thử trên port tạm
 ├── k8s/
 │   ├── base/            # Namespace, Deployment, Service, ConfigMap
 │   └── overlays/
@@ -278,8 +287,8 @@ Ngoài README và cấu hình Git, các thành phần dưới đây sẽ đượ
 ├── infra/
 │   └── eks/             # Cấu hình eksctl, hướng dẫn IAM/network/cleanup
 ├── scripts/
-│   ├── bootstrap-deps.sh # Pin, build và cài dependencies vào build/deps/install
-│   └── ...               # Smoke test và demo scripts
+│   ├── smoke.sh         # Kiểm tra contract trên một instance đang chạy
+│   └── ...              # Demo scripts
 └── docs/
     ├── demo.md          # Runbook đã kiểm thử
     └── evidence/        # Kết quả đã loại bỏ credential/thông tin nhạy cảm
@@ -287,26 +296,20 @@ Ngoài README và cấu hình Git, các thành phần dưới đây sẽ đượ
 
 ## Chạy và kiểm tra sau khi hiện thực
 
-Các lệnh ở mục này là giao diện vận hành dự kiến, **chưa chạy được ở trạng thái repo chỉ có tài liệu**. Khi bổ sung ứng dụng, từng chủ sở hữu phải kiểm thử và cập nhật hướng dẫn tương ứng.
+Các lệnh ở mục "Ứng dụng local" và "Docker" đã được kiểm chứng ngày 2026-11-15 trên macOS arm64 với Node.js 24.22.2 và Docker qua OrbStack. Các lệnh Kubernetes/AWS vẫn là giao diện vận hành dự kiến; từng chủ sở hữu kiểm thử và cập nhật hướng dẫn tương ứng.
 
 ### Ứng dụng local
 
-Điều kiện: compiler hỗ trợ C++17, CMake từ 3.20, Ninja, curl và dependencies hệ thống theo bản Drogon đã chốt. Thành viên 1 viết `scripts/bootstrap-deps.sh`, ghi rõ prerequisites và pin dependencies; script không tự nâng cấp toolchain hệ thống. Không cần AWS để phát triển API.
-
-CMake đặt binary application tại `build/bin/shipquote`; test targets được đăng ký bằng CTest khi `BUILD_TESTING=ON`. Các tên target và output path là quy ước cần hiện thực. DrogonTest cung cấp assertions và hỗ trợ kiểm thử đồng bộ/bất đồng bộ; CTest chạy các test targets đã đăng ký. [DrogonTest](https://github.com/drogonframework/drogon/wiki/ENG-19-Testing-Framework), [CTest](https://cmake.org/cmake/help/latest/module/CTest.html)
+Điều kiện: Node.js từ 22 trở lên (khuyến nghị 24 theo `.nvmrc`), npm và curl. Không cần AWS để phát triển API.
 
 ```bash
-bash scripts/bootstrap-deps.sh
-cmake -S . -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DBUILD_TESTING=ON \
-  -DCMAKE_PREFIX_PATH="$PWD/build/deps/install"
-cmake --build build --parallel 2
-ctest --test-dir build --output-on-failure --no-tests=error
-./build/bin/shipquote
+nvm use        # nếu dùng nvm
+npm ci
+npm test
+npm start
 ```
 
-Kiểm tra format bằng clang-format trên source/header do nhóm viết; bật `-Wall -Wextra -Wpedantic` cho targets ứng dụng/test với GCC/Clang và xử lý warnings của code nhóm. Bản release dùng `CMAKE_BUILD_TYPE=Release`; không đưa sanitizer instrumentation vào image demo mặc định.
+`npm test` chạy unit tests và HTTP tests; HTTP tests tự mở server trên port tạm nên không cần port 8080 trống. `npm start` lắng nghe tại `0.0.0.0:8080`; dừng bằng `Ctrl+C`.
 
 Từ terminal khác:
 
@@ -320,9 +323,11 @@ curl -fsS http://localhost:8080/api/v1/quotes \
 
 Kết quả báo giá mong đợi: `billable_weight_kg=2`, `total_vnd=44000` với cấu hình mặc định.
 
+`bash scripts/smoke.sh [BASE_URL]` chạy lại các kiểm tra trên cùng các trường hợp lỗi `415`, `400`, `422`, `404`; mặc định trỏ vào `http://localhost:8080`.
+
 ### Docker
 
-Điều kiện: Docker đang chạy. Ví dụ sau dùng image Linux x86; trên máy ARM, build/run có thể cần emulation. Image cho kind phải tương thích kiến trúc node local, có thể dùng tag local riêng.
+Điều kiện: Docker đang chạy. Ví dụ sau dùng image Linux x86; trên máy ARM, build/run có thể cần emulation. Image cho kind phải tương thích kiến trúc node local, có thể dùng tag local riêng. Stage `test` của Dockerfile chạy `npm test`, nên test hỏng thì image không build được.
 
 ```bash
 docker build --platform linux/amd64 -t shipquote:1.0.0 .
@@ -333,6 +338,24 @@ Gọi lại các endpoint ở trên, sau đó kiểm tra dừng ứng dụng t�
 
 ```bash
 docker stop --time 30 shipquote
+```
+
+Kết quả quan sát: container chạy với uid 1000, dừng trong khoảng 0,3 giây với exit code 0.
+
+Thử cờ demo trên container:
+
+```bash
+docker run --rm --name shipquote -p 8080:8080 -e DEMO_MODE=true shipquote:1.0.0
+docker exec shipquote touch /tmp/shipquote-unready     # ready 503, live 200
+docker exec shipquote rm /tmp/shipquote-unready
+docker exec shipquote touch /tmp/shipquote-unhealthy   # cả hai probe 503
+```
+
+Bản 1.1.0 là một lần build mới sau khi tăng version:
+
+```bash
+npm version minor --no-git-tag-version   # sửa package.json và package-lock.json
+docker build --platform linux/amd64 -t shipquote:1.1.0 .
 ```
 
 ### Kubernetes và AWS
@@ -381,12 +404,12 @@ Lưu ý diễn giải kết quả:
 
 ## Milestones và cách phối hợp
 
-Lịch dự trù khoảng 2–3 tuần làm bán thời gian, gồm thời gian làm quen Drogon, CMake và Docker. Task application dự trù 6–10 buổi, mỗi buổi 2–3 giờ nếu đã có nền tảng C++; dành thêm thời gian đệm nếu chưa quen dependencies/linking. Mục tiêu 2–3 buổi đầu có image tối thiểu với health/info để nhóm tích hợp. Các ước lượng được điều chỉnh theo kết quả thực tế.
+Lịch dự trù khoảng 2–3 tuần làm bán thời gian. Phần application đã chuyển từ C++/Drogon sang Node.js/Express để rút ngắn thời gian hiện thực và bàn giao image sớm cho nhóm tích hợp. Các ước lượng được điều chỉnh theo kết quả thực tế.
 
 | Mốc | Kết quả cần có | Phụ thuộc |
 | --- | --- | --- |
 | M0 — Chốt contract | Chọn owner cụ thể, thống nhất endpoint/port/config/image; xác nhận quyền AWS | Cả nhóm |
-| M1 — API tối thiểu | CMake/Docker build được, health/info chạy; bàn giao image sớm rồi bổ sung tính phí | Thành viên 1 |
+| M1 — API và image | `npm test` qua, image build được, đủ endpoint theo contract; bàn giao image cho nhóm | Thành viên 1 |
 | M2 — Local MVP | API đầy đủ và 3 replica chạy qua Service trên kind | Thành viên 1 + 2 |
 | M3 — Cloud MVP | Cùng ứng dụng chạy trên EKS, pull từ ECR | Thành viên 2 + 3 |
 | M4 — Nghiệm thu | Demo lặp lại được, có bằng chứng, báo cáo và cleanup | Cả nhóm |
@@ -415,12 +438,9 @@ Không commit AWS credentials, kubeconfig, file `.env` thực tế hoặc log ch
 
 ## Tài liệu kỹ thuật
 
-- [Drogon framework](https://github.com/drogonframework/drogon)
-- [Drogon installation](https://github.com/drogonframework/drogon/wiki/ENG-02-Installation)
-- [Drogon threading model](https://github.com/drogonframework/drogon/wiki/ENG-FAQ-1-Understanding-drogon-threading-model)
-- [CMake tutorial](https://cmake.org/cmake/help/latest/guide/tutorial/index.html)
-- [CTest](https://cmake.org/cmake/help/latest/module/CTest.html)
-- [JsonCpp](https://github.com/open-source-parsers/jsoncpp)
+- [Express](https://expressjs.com/)
+- [Node.js test runner](https://nodejs.org/api/test.html)
+- [Node.js Docker best practices](https://github.com/nodejs/docker-node/blob/main/docs/BestPractices.md)
 - [Docker multi-stage builds](https://docs.docker.com/build/building/multi-stage/)
 - [kind quick start](https://kind.sigs.k8s.io/docs/user/quick-start/)
 - [Amazon EKS user guide](https://docs.aws.amazon.com/eks/latest/userguide/)
