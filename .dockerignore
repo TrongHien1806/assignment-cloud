@@ -1,0 +1,13 @@
+.git
+node_modules
+coverage
+npm-debug.log*
+README.local.md
+PLAN.md
+.env
+.env.*
+.aws
+.kube
+kubeconfig
+kubeconfig.*
+.DS_Store
