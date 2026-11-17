@@ -1,0 +1,17 @@
+{
+  "name": "shipquote",
+  "version": "1.0.0",
+  "description": "REST API tính phí vận chuyển cho mini project Cloud Computing",
+  "private": true,
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "5.3.0"
+  }
+}
